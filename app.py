@@ -6,7 +6,6 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Mapeamento de acentos para o padrão RTF
 def limpar_acentos_rtf(texto):
     if not texto: return ""
     mapa = {
@@ -43,43 +42,44 @@ def index():
         linhas = texto_bruto.strip().split('\n')
         mediadores_dict = {}
         
+        # Regex para identificar o processo
+        regex_proc = re.compile(r"(\d{7}-\d{2}\.\d{4})")
+        
         for linha in linhas:
-            linha = linha.strip()
-            if not linha: continue
+            linha_limpa = linha.strip()
+            if not linha_limpa: continue
             
-            # 1. Localiza o processo como âncora principal
-            match_proc = re.search(r"(\d{7}-\d{2}\.\d{4})", linha)
+            match_proc = regex_proc.search(linha_limpa)
             if not match_proc: continue
             
             proc = match_proc.group(1)
             
-            # 2. Divide a linha em 'antes do processo' e 'depois do processo'
-            partes_antes = linha.split(proc)[0].strip().split()
-            # Divide o depois por Tabs ou múltiplos espaços
-            partes_depois = [p.strip() for p in re.split(r'\t|\s{2,}', linha.split(proc)[1].strip()) if p.strip()]
+            # --- LÓGICA DE DEFINIÇÃO DO GRUPO (ARQUIVO) ---
+            linha_upper = linha_limpa.upper()
+            # Se encontrar qualquer variação de cancelamento em qualquer lugar da linha
+            if any(x in linha_upper for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"]):
+                nome_grupo = "AUDIENCIA CANCELADA"
+            else:
+                # Se não for cancelada, pega o mediador na última coluna
+                partes_linha = re.split(r'\t|\s{2,}', linha_limpa)
+                nome_grupo = partes_linha[-1].strip()
+
+            # --- EXTRAÇÃO DOS DADOS ---
+            partes_antes = linha_limpa.split(proc)[0].strip().split()
+            partes_depois = [p.strip() for p in re.split(r'\t|\s{2,}', linha_limpa.split(proc)[1].strip()) if p.strip()]
             
             if len(partes_antes) >= 2 and len(partes_depois) >= 1:
                 data = partes_antes[0]
                 hora = partes_antes[1]
                 senha = partes_depois[0]
-                
-                # A Vara é o que estiver entre a senha e o mediador (geralmente partes_depois[1])
-                vara = partes_depois[1] if len(partes_depois) > 2 else (partes_depois[1] if len(partes_depois) == 2 else "---")
-                
-                # O Mediador é SEMPRE o último bloco de texto da linha inteira
-                mediador_raw = re.split(r'\t|\s{2,}', linha)[-1].strip()
-                
-                # Normalização de Cancelados para evitar múltiplos arquivos de erro
-                med_upper = mediador_raw.upper()
-                if any(x in med_upper for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"]):
-                    nome_grupo = "AUDIENCIA CANCELADA"
-                else:
-                    nome_grupo = mediador_raw
+                # A Vara é sempre a coluna após a senha
+                vara = partes_depois[1] if len(partes_depois) > 1 else "---"
+                # Evita que a vara seja o próprio nome do mediador
+                if vara == nome_grupo: vara = "---"
 
                 if nome_grupo not in mediadores_dict:
                     mediadores_dict[nome_grupo] = []
                 
-                # Cálculo do dia da semana simplificado
                 try:
                     d_obj = datetime.strptime(data, "%d/%m/%Y")
                     dias = ["SEGUNDA-FEIRA", "TER\u00c7A-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "S\u00c1BADO", "DOMINGO"]
@@ -100,15 +100,15 @@ def index():
                 zf.writestr(nome_arq, conteudo.encode('ascii', errors='ignore'))
         
         memory_file.seek(0)
-        return send_file(memory_file, as_attachment=True, download_name="pautas_completas.zip", mimetype='application/zip')
+        return send_file(memory_file, as_attachment=True, download_name="pautas.zip", mimetype='application/zip')
 
     return '''
     <html><body style="font-family:sans-serif; background:#f0f2f5; padding:50px;">
     <div style="background:white; padding:30px; border-radius:10px; max-width:900px; margin:auto; box-shadow:0 5px 15px rgba(0,0,0,0.1);">
-    <h2>Gerador de Pautas - Garantia Total</h2>
-    <p>O script processa cada linha individualmente. O nome na última coluna define o arquivo.</p>
+    <h2>Gerador de Pautas - Filtro Global de Cancelamento</h2>
+    <p>Qualquer linha contendo "CANCELADA" vai para o arquivo de cancelamentos.</p>
     <form method="post"><textarea name="dados" style="width:100%; height:450px; font-family:monospace; padding:10px;"></textarea><br>
-    <button type="submit" style="width:100%; padding:15px; background:#1a73e8; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-top:10px;">GERAR E BAIXAR TODOS OS ARQUIVOS (.ZIP)</button>
+    <button type="submit" style="width:100%; padding:15px; background:#1a73e8; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-top:10px;">GERAR ZIP</button>
     </form></div></body></html>
     '''
 
