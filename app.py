@@ -1,6 +1,7 @@
 from flask import Flask, request, render_template_string, send_file
 import re
 import io
+import zipfile
 from datetime import datetime
 
 app = Flask(__name__)
@@ -29,27 +30,50 @@ def obter_dia_semana(data_str):
         return DIAS_SEMANA[data_obj.weekday()]
     except: return "DIA"
 
+def criar_conteudo_rtf(nome_mediador, audiencias):
+    rtf = r"{\rtf1\ansi\deff0 {\fonttbl {\f0 Arial;}}\f0\fs24 "
+    rtf += "-"*64 + r"\par\par Tudo bem? \par\par "
+    rtf += r"Segue(m) \b *NOVA(S) NOMEA\u199?\u195?O(\u213?ES)* \b0 \par "
+    rtf += r"Segue(m) \b *CANCELAMENTO(S) DE AUDI\u202?NCIA(S)* \b0 \par\par "
+    rtf += "-"*64 + r"\par\par "
+    
+    for item in audiencias:
+        dia = limpar_acentos_rtf(item['dia_semana'])
+        vara = limpar_acentos_rtf(item['vara'])
+        
+        rtf += r"{\b *" + f"{dia}: {item['data']} " + r"\'e0s " + f"{item['hora']}" + r"*} \par "
+        rtf += f"PROC {item['proc']} \par "
+        rtf += f"SENHA: {item['senha']} \par "
+        rtf += f"VARA: {vara} \par "
+        rtf += f"MEDIADOR(A) {limpar_acentos_rtf(nome_mediador)} \par\par "
+        rtf += "-"*64 + r"\par\par "
+    
+    rtf += "}"
+    return rtf
+
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>Gerador RTF</title>
+    <title>Gerador de Pautas ZIP</title>
     <style>
-        body { font-family: sans-serif; background: #f4f4f9; padding: 40px; display: flex; justify-content: center; }
-        .box { width: 100%; max-width: 700px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        h2 { color: #2c3e50; margin-top: 0; }
-        textarea { width: 100%; border: 1px solid #ddd; border-radius: 8px; padding: 15px; font-family: monospace; font-size: 13px; box-sizing: border-box; }
-        button { background: #3498db; color: white; border: none; padding: 12px 25px; border-radius: 6px; cursor: pointer; margin-top: 15px; font-weight: bold; width: 100%; }
-        button:hover { background: #2980b9; }
+        body { font-family: sans-serif; background: #f0f2f5; padding: 40px; display: flex; justify-content: center; }
+        .box { width: 100%; max-width: 800px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
+        h2 { color: #1a73e8; margin-top: 0; }
+        textarea { width: 100%; border: 1px solid #dadce0; border-radius: 8px; padding: 15px; font-family: 'Courier New', monospace; font-size: 13px; box-sizing: border-box; }
+        button { background: #1a73e8; color: white; border: none; padding: 15px; border-radius: 8px; cursor: pointer; margin-top: 15px; font-weight: bold; width: 100%; font-size: 16px; }
+        button:hover { background: #1557b0; }
+        p { color: #5f6368; font-size: 0.9em; }
     </style>
 </head>
 <body>
     <div class="box">
-        <h2>Gerador de Pautas</h2>
+        <h2>Gerador de Pautas (Multi-Mediadores)</h2>
+        <p>Cole a lista completa. O sistema criar&aacute; um arquivo para cada mediador e baixar&aacute; tudo em um .ZIP</p>
         <form method="post">
-            <textarea name="dados" rows="12" placeholder="Cole os dados aqui..."></textarea>
-            <button type="submit">GERAR E BAIXAR .RTF</button>
+            <textarea name="dados" rows="15" placeholder="Cole aqui as linhas da sua pauta..."></textarea>
+            <button type="submit">GERAR E BAIXAR ARQUIVOS (.ZIP)</button>
         </form>
     </div>
 </body>
@@ -60,41 +84,42 @@ HTML_TEMPLATE = '''
 def index():
     if request.method == 'POST':
         texto_bruto = request.form['dados']
-        # Regex ajustada para capturar os dados corretamente
-        padrao = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+(\d{7}-\d{2}\.\d{4})\s+([\w\.-]+)\s+(.*?)\s+(?:SIM|N\u00c3O)\s+([A-Z\s]+(?:\n|$|  ))")
+        padrao = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+(\d{7}-\d{2}\.\d{4})\s+([\w\.-]+)\s+(.*?)\s+(?:SIM|N\u00c3O)\s+([A-Z\s\(\)]+(?:\n|$|  ))")
         matches = padrao.findall(texto_bruto)
         
-        if not matches: return "Nenhum dado encontrado no formato correto."
+        if not matches: return "Nenhum dado encontrado no formato esperado."
 
-        mediador = matches[0][5].strip()
-        
-        # Construção do RTF
-        rtf = r"{\rtf1\ansi\deff0 {\fonttbl {\f0 Arial;}}\f0\fs24 "
-        rtf += "-"*64 + r"\par\par Tudo bem? \par\par "
-        rtf += r"Segue(m) \b *NOVA(S) NOMEA\u199?\u195?O(\u213?ES)* \b0 \par "
-        rtf += r"Segue(m) \b *CANCELAMENTO(S) DE AUDI\u202?NCIA(S)* \b0 \par\par "
-        rtf += "-"*64 + r"\par\par "
-        
+        # Agrupar por mediador
+        mediadores_dict = {}
         for m in matches:
-            d, h, p, s, v, med = m
-            dia = limpar_acentos_rtf(obter_dia_semana(d))
-            vara = limpar_acentos_rtf(v.strip())
+            data, hora, proc, senha, vara, med_raw = m
+            nome_med = med_raw.strip()
             
-            # Ajuste no fechamento do negrito para evitar o caractere estranho
-            rtf += r"{\b *" + f"{dia}: {d} " + r"\'e0s " + f"{h}" + r"*} \par "
-            rtf += f"PROC {p} \par "
-            rtf += f"SENHA: {s} \par "
-            rtf += f"VARA: {vara} \par "
-            rtf += f"MEDIADOR(A) {med.strip()} \par\par "
-            rtf += "-"*64 + r"\par\par "
+            if nome_med not in mediadores_dict:
+                mediadores_dict[nome_med] = []
+            
+            mediadores_dict[nome_med].append({
+                'data': data, 'hora': hora, 'proc': proc, 
+                'senha': senha, 'vara': vara.strip(),
+                'dia_semana': obter_dia_semana(data)
+            })
+
+        # Criar o arquivo ZIP na memória
+        memory_file = io.BytesIO()
+        with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for nome_med, audiencias in mediadores_dict.items():
+                conteudo_rtf = criar_conteudo_rtf(nome_med, audiencias)
+                # Nome do arquivo sanitizado
+                filename = f"{nome_med.replace(' ', '_')}.rtf"
+                zf.writestr(filename, conteudo_rtf.encode('ascii', errors='ignore'))
         
-        rtf += "}"
+        memory_file.seek(0)
         
         return send_file(
-            io.BytesIO(rtf.encode('ascii', errors='ignore')),
+            memory_file,
             as_attachment=True,
-            download_name=f"pauta_{mediador.replace(' ', '_')}.rtf",
-            mimetype='application/rtf'
+            download_name=f"pautas_{datetime.now().strftime('%d_%m_%Y')}.zip",
+            mimetype='application/zip'
         )
 
     return render_template_string(HTML_TEMPLATE)
