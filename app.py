@@ -30,7 +30,7 @@ def criar_conteudo_rtf(nome_grupo, audiencias):
         rtf += f"PROC {item['proc']}. \par "
         rtf += f"SENHA: {item['senha']}. \par "
         rtf += f"VARA: {limpar_acentos_rtf(item['vara'])}. \par "
-        rtf += f"MEDIADOR(A) {limpar_acentos_rtf(nome_grupo)}. \par\par "
+        rtf += f"MEDIADOR(A) {limpar_acentos_rtf(item['mediador_original'])}. \par\par "
         rtf += "-"*64 + r"\par\par "
     rtf += "}"
     return rtf
@@ -42,7 +42,6 @@ def index():
         linhas = texto_bruto.strip().split('\n')
         mediadores_dict = {}
         
-        # Regex para identificar o processo
         regex_proc = re.compile(r"(\d{7}-\d{2}\.\d{4})")
         
         for linha in linhas:
@@ -53,18 +52,16 @@ def index():
             if not match_proc: continue
             
             proc = match_proc.group(1)
-            
-            # --- LÓGICA DE DEFINIÇÃO DO GRUPO (ARQUIVO) ---
             linha_upper = linha_limpa.upper()
-            # Se encontrar qualquer variação de cancelamento em qualquer lugar da linha
-            if any(x in linha_upper for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"]):
-                nome_grupo = "AUDIENCIA CANCELADA"
-            else:
-                # Se não for cancelada, pega o mediador na última coluna
-                partes_linha = re.split(r'\t|\s{2,}', linha_limpa)
-                nome_grupo = partes_linha[-1].strip()
+            
+            # Identifica se é cancelada
+            is_cancelada = any(x in linha_upper for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"])
+            
+            # Identifica o mediador (sempre a última coluna)
+            partes_linha = re.split(r'\t|\s{2,}', linha_limpa)
+            mediador_nome = partes_linha[-1].strip()
 
-            # --- EXTRAÇÃO DOS DADOS ---
+            # Extração de dados comuns
             partes_antes = linha_limpa.split(proc)[0].strip().split()
             partes_depois = [p.strip() for p in re.split(r'\t|\s{2,}', linha_limpa.split(proc)[1].strip()) if p.strip()]
             
@@ -72,26 +69,38 @@ def index():
                 data = partes_antes[0]
                 hora = partes_antes[1]
                 senha = partes_depois[0]
-                # A Vara é sempre a coluna após a senha
                 vara = partes_depois[1] if len(partes_depois) > 1 else "---"
-                # Evita que a vara seja o próprio nome do mediador
-                if vara == nome_grupo: vara = "---"
+                if vara == mediador_nome: vara = "---"
 
-                if nome_grupo not in mediadores_dict:
-                    mediadores_dict[nome_grupo] = []
-                
                 try:
                     d_obj = datetime.strptime(data, "%d/%m/%Y")
                     dias = ["SEGUNDA-FEIRA", "TER\u00c7A-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "S\u00c1BADO", "DOMINGO"]
                     dia_semana = dias[d_obj.weekday()]
                 except: dia_semana = "DIA"
 
-                mediadores_dict[nome_grupo].append({
+                dados_audiencia = {
                     'data': data, 'hora': hora, 'proc': proc, 
-                    'senha': senha, 'vara': vara, 'dia_semana': dia_semana
-                })
+                    'senha': senha, 'vara': vara, 'dia_semana': dia_semana,
+                    'mediador_original': mediador_nome
+                }
 
-        # Geração do ZIP
+                # --- REGRA DE DISTRIBUIÇÃO ---
+                destinos = []
+                
+                # Se for cancelada, vai para o arquivo de cancelamentos
+                if is_cancelada:
+                    destinos.append("AUDIENCIA CANCELADA")
+                
+                # Se o mediador não for um termo de cancelamento, vai para o arquivo do mediador
+                # (Isso garante que se for cancelada E tiver mediador, vá para ambos)
+                if not any(x in mediador_nome.upper() for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"]):
+                    destinos.append(mediador_nome)
+
+                for grupo in destinos:
+                    if grupo not in mediadores_dict:
+                        mediadores_dict[grupo] = []
+                    mediadores_dict[grupo].append(dados_audiencia)
+
         memory_file = io.BytesIO()
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
             for grupo, lista in mediadores_dict.items():
@@ -100,13 +109,13 @@ def index():
                 zf.writestr(nome_arq, conteudo.encode('ascii', errors='ignore'))
         
         memory_file.seek(0)
-        return send_file(memory_file, as_attachment=True, download_name="pautas.zip", mimetype='application/zip')
+        return send_file(memory_file, as_attachment=True, download_name="pautas_duplicadas.zip", mimetype='application/zip')
 
     return '''
     <html><body style="font-family:sans-serif; background:#f0f2f5; padding:50px;">
     <div style="background:white; padding:30px; border-radius:10px; max-width:900px; margin:auto; box-shadow:0 5px 15px rgba(0,0,0,0.1);">
-    <h2>Gerador de Pautas - Filtro Global de Cancelamento</h2>
-    <p>Qualquer linha contendo "CANCELADA" vai para o arquivo de cancelamentos.</p>
+    <h2>Gerador de Pautas - Regra de Dupla Inser\u00e7\u00e3o</h2>
+    <p>Canceladas v\u00e3o para o arquivo geral E para o arquivo do mediador (se houver).</p>
     <form method="post"><textarea name="dados" style="width:100%; height:450px; font-family:monospace; padding:10px;"></textarea><br>
     <button type="submit" style="width:100%; padding:15px; background:#1a73e8; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-top:10px;">GERAR ZIP</button>
     </form></div></body></html>
