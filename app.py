@@ -61,18 +61,17 @@ HTML_TEMPLATE = '''
         body { font-family: sans-serif; background: #f0f2f5; padding: 40px; display: flex; justify-content: center; }
         .box { width: 100%; max-width: 800px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
         h2 { color: #1a73e8; margin-top: 0; }
-        textarea { width: 100%; border: 1px solid #dadce0; border-radius: 8px; padding: 15px; font-family: 'Courier New', monospace; font-size: 13px; box-sizing: border-box; }
+        textarea { width: 100%; border: 1px solid #dadce0; border-radius: 8px; padding: 15px; font-family: 'Courier New', monospace; font-size: 13px; box-sizing: border-box; min-height: 300px; }
         button { background: #1a73e8; color: white; border: none; padding: 15px; border-radius: 8px; cursor: pointer; margin-top: 15px; font-weight: bold; width: 100%; font-size: 16px; }
         button:hover { background: #1557b0; }
-        p { color: #5f6368; font-size: 0.9em; }
     </style>
 </head>
 <body>
     <div class="box">
         <h2>Gerador de Pautas (Multi-Mediadores)</h2>
-        <p>Cole a lista completa. O sistema criar&aacute; um arquivo para cada mediador e baixar&aacute; tudo em um .ZIP</p>
+        <p>Cole a lista completa abaixo:</p>
         <form method="post">
-            <textarea name="dados" rows="15" placeholder="Cole aqui as linhas da sua pauta..."></textarea>
+            <textarea name="dados" placeholder="29/04/2026	15:30	1001348-32.2026	CANCELADA..."></textarea>
             <button type="submit">GERAR E BAIXAR ARQUIVOS (.ZIP)</button>
         </form>
     </div>
@@ -84,43 +83,51 @@ HTML_TEMPLATE = '''
 def index():
     if request.method == 'POST':
         texto_bruto = request.form['dados']
-        padrao = re.compile(r"(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2})\s+(\d{7}-\d{2}\.\d{4})\s+([\w\.-]+)\s+(.*?)\s+(?:SIM|N\u00c3O)\s+([A-Z\s\(\)]+(?:\n|$|  ))")
-        matches = padrao.findall(texto_bruto)
+        linhas = texto_bruto.strip().split('\n')
         
-        if not matches: return "Nenhum dado encontrado no formato esperado."
-
-        # Agrupar por mediador
         mediadores_dict = {}
-        for m in matches:
-            data, hora, proc, senha, vara, med_raw = m
-            nome_med = med_raw.strip()
+        
+        # Padrão flexível: busca a data, a hora e o processo. 
+        # O que vem depois é tratado como senha, vara e mediador.
+        for linha in linhas:
+            if not linha.strip(): continue
             
-            if nome_med not in mediadores_dict:
-                mediadores_dict[nome_med] = []
+            # Tenta encontrar os dados básicos via divisão de espaços/tabs
+            partes = re.split(r'\t|\s{2,}', linha.strip())
             
-            mediadores_dict[nome_med].append({
-                'data': data, 'hora': hora, 'proc': proc, 
-                'senha': senha, 'vara': vara.strip(),
-                'dia_semana': obter_dia_semana(data)
-            })
+            # Se a linha tiver pelo menos as colunas essenciais
+            if len(partes) >= 5:
+                # Ajuste de índices baseado na estrutura comum:
+                # [0]Data [1]Hora [2]Processo [3]Senha/Status [4]Vara [5]SIM/NÃO [6]Mediador
+                data = partes[0]
+                hora = partes[1]
+                proc = partes[2]
+                senha = partes[3]
+                vara = partes[4]
+                # O mediador geralmente é a última parte ou a parte após o SIM/NÃO
+                mediador = partes[-1]
+                
+                if mediador not in mediadores_dict:
+                    mediadores_dict[mediador] = []
+                
+                mediadores_dict[mediador].append({
+                    'data': data, 'hora': hora, 'proc': proc, 
+                    'senha': senha, 'vara': vara,
+                    'dia_semana': obter_dia_semana(data)
+                })
 
-        # Criar o arquivo ZIP na memória
+        if not mediadores_dict:
+            return "Nenhum dado pôde ser processado. Verifique o formato."
+
         memory_file = io.BytesIO()
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
             for nome_med, audiencias in mediadores_dict.items():
                 conteudo_rtf = criar_conteudo_rtf(nome_med, audiencias)
-                # Nome do arquivo sanitizado
-                filename = f"{nome_med.replace(' ', '_')}.rtf"
+                filename = f"{nome_med.replace(' ', '_').replace('/', '-')}.rtf"
                 zf.writestr(filename, conteudo_rtf.encode('ascii', errors='ignore'))
         
         memory_file.seek(0)
-        
-        return send_file(
-            memory_file,
-            as_attachment=True,
-            download_name=f"pautas_{datetime.now().strftime('%d_%m_%Y')}.zip",
-            mimetype='application/zip'
-        )
+        return send_file(memory_file, as_attachment=True, download_name="pautas.zip", mimetype='application/zip')
 
     return render_template_string(HTML_TEMPLATE)
 
