@@ -33,7 +33,6 @@ def obter_dia_semana(data_str):
 def criar_conteudo_rtf(nome_mediador, audiencias):
     rtf = r"{\rtf1\ansi\deff0 {\fonttbl {\f0 Arial;}}\f0\fs24 "
     rtf += "-"*64 + r"\par\par Tudo bem? \par\par "
-    # Inserção dos dois-pontos nos cabeçalhos
     rtf += r"Segue(m) \b *NOVA(S) NOMEA\u199?\u195?O(\u213?ES):* \b0 \par "
     rtf += r"Segue(m) \b *CANCELAMENTO(S) DE AUDI\u202?NCIA(S):* \b0 \par\par "
     rtf += "-"*64 + r"\par\par "
@@ -41,8 +40,6 @@ def criar_conteudo_rtf(nome_mediador, audiencias):
     for item in audiencias:
         dia = limpar_acentos_rtf(item['dia_semana'])
         vara = limpar_acentos_rtf(item['vara'])
-        
-        # Inserção de ponto final nas linhas conforme exemplo
         rtf += r"{\b *" + f"{dia}: {item['data']} " + r"\'e0s " + f"{item['hora']}.*" + r"} \par "
         rtf += f"PROC {item['proc']}. \par "
         rtf += f"SENHA: {item['senha']}. \par "
@@ -63,17 +60,16 @@ HTML_TEMPLATE = '''
         body { font-family: sans-serif; background: #f0f2f5; padding: 40px; display: flex; justify-content: center; }
         .box { width: 100%; max-width: 800px; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.08); }
         h2 { color: #1a73e8; margin-top: 0; }
-        textarea { width: 100%; border: 1px solid #dadce0; border-radius: 8px; padding: 15px; font-family: 'Courier New', monospace; font-size: 13px; box-sizing: border-box; min-height: 300px; }
+        textarea { width: 100%; border: 1px solid #dadce0; border-radius: 8px; padding: 15px; font-family: monospace; font-size: 13px; box-sizing: border-box; min-height: 400px; }
         button { background: #1a73e8; color: white; border: none; padding: 15px; border-radius: 8px; cursor: pointer; margin-top: 15px; font-weight: bold; width: 100%; font-size: 16px; }
-        button:hover { background: #1557b0; }
     </style>
 </head>
 <body>
     <div class="box">
-        <h2>Gerador de Pautas (Pontua\u00e7\u00e3o Ajustada)</h2>
+        <h2>Gerador de Pautas Final</h2>
         <form method="post">
             <textarea name="dados" placeholder="Cole a pauta aqui..."></textarea>
-            <button type="submit">GERAR E BAIXAR (.ZIP)</button>
+            <button type="submit">GERAR E BAIXAR ZIP</button>
         </form>
     </div>
 </body>
@@ -89,16 +85,25 @@ def index():
         
         for linha in linhas:
             if not linha.strip(): continue
-            partes = re.split(r'\t|\s{2,}', linha.strip())
+            
+            # Divide a linha por TAB ou múltiplos espaços
+            partes = [p.strip() for p in re.split(r'\t|\s{2,}', linha.strip()) if p.strip()]
             
             if len(partes) >= 5:
+                # 1, 2, 3: Fixos no início
                 data = partes[0]
                 hora = partes[1]
                 proc = partes[2]
-                senha = partes[3]
-                vara = partes[4]
-                mediador = partes[-1]
                 
+                # 4: Senha/Cancelada (Sempre após processo)
+                senha = partes[3]
+                
+                # 5: Vara (Sempre preenchida)
+                vara = partes[4]
+                
+                # O Mediador é sempre o ÚLTIMO, não importa se o SIM/NÃO existe antes dele
+                mediador = partes[-1]
+
                 if mediador not in mediadores_dict:
                     mediadores_dict[mediador] = []
                 
@@ -108,17 +113,16 @@ def index():
                     'dia_semana': obter_dia_semana(data)
                 })
 
-        if not mediadores_dict: return "Erro ao processar dados."
-
         memory_file = io.BytesIO()
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
             for nome_med, audiencias in mediadores_dict.items():
                 conteudo_rtf = criar_conteudo_rtf(nome_med, audiencias)
-                filename = f"{nome_med.replace(' ', '_').replace('/', '-')}.rtf"
-                zf.writestr(filename, conteudo_rtf.encode('ascii', errors='ignore'))
+                # Sanitização básica do nome do arquivo
+                safe_name = nome_med.replace(' ', '_').replace('/', '-').replace('\\', '-')
+                zf.writestr(f"{safe_name}.rtf", conteudo_rtf.encode('ascii', errors='ignore'))
         
         memory_file.seek(0)
-        return send_file(memory_file, as_attachment=True, download_name="pautas_corrigidas.zip", mimetype='application/zip')
+        return send_file(memory_file, as_attachment=True, download_name="pautas.zip", mimetype='application/zip')
 
     return render_template_string(HTML_TEMPLATE)
 
