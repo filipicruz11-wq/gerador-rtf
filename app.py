@@ -6,11 +6,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-DIAS_SEMANA = {
-    0: "SEGUNDA-FEIRA", 1: "TER\u00c7A-FEIRA", 2: "QUARTA-FEIRA",
-    3: "QUINTA-FEIRA", 4: "SEXTA-FEIRA", 5: "S\u00c1BADO", 6: "DOMINGO"
-}
-
+# Mapeamento de acentos para o padrão RTF
 def limpar_acentos_rtf(texto):
     if not texto: return ""
     mapa = {
@@ -24,25 +20,18 @@ def limpar_acentos_rtf(texto):
         texto = texto.replace(original, rtf_code)
     return texto
 
-def obter_dia_semana(data_str):
-    try:
-        data_obj = datetime.strptime(data_str, "%d/%m/%Y")
-        return DIAS_SEMANA[data_obj.weekday()]
-    except: return "DIA"
-
-def criar_conteudo_rtf(nome_mediador, audiencias):
+def criar_conteudo_rtf(nome_grupo, audiencias):
     rtf = r"{\rtf1\ansi\deff0 {\fonttbl {\f0 Arial;}}\f0\fs24 "
     rtf += "-"*64 + r"\par\par Tudo bem? \par\par "
     rtf += r"Segue(m) \b *NOVA(S) NOMEA\u199?\u195?O(\u213?ES):* \b0 \par "
     rtf += r"Segue(m) \b *CANCELAMENTO(S) DE AUDI\u202?NCIA(S):* \b0 \par\par "
     rtf += "-"*64 + r"\par\par "
     for item in audiencias:
-        dia = limpar_acentos_rtf(item['dia_semana'])
-        rtf += r"{\b *" + f"{dia}: {item['data']} " + r"\'e0s " + f"{item['hora']}.*" + r"} \par "
+        rtf += r"{\b *" + f"{item['dia_semana']}: {item['data']} " + r"\'e0s " + f"{item['hora']}.*" + r"} \par "
         rtf += f"PROC {item['proc']}. \par "
         rtf += f"SENHA: {item['senha']}. \par "
         rtf += f"VARA: {limpar_acentos_rtf(item['vara'])}. \par "
-        rtf += f"MEDIADOR(A) {limpar_acentos_rtf(nome_mediador)}. \par\par "
+        rtf += f"MEDIADOR(A) {limpar_acentos_rtf(nome_grupo)}. \par\par "
         rtf += "-"*64 + r"\par\par "
     rtf += "}"
     return rtf
@@ -58,58 +47,69 @@ def index():
             linha = linha.strip()
             if not linha: continue
             
-            # 1. Encontrar Processo (0000000-00.0000)
-            proc_match = re.search(r"(\d{7}-\d{2}\.\d{4})", linha)
-            # 2. Encontrar Data (00/00/0000)
-            data_match = re.search(r"(\d{2}/\d{2}/\d{4})", linha)
-            # 3. Encontrar Hora (00:00)
-            hora_match = re.search(r"(\d{2}:\d{2})", linha)
+            # 1. Localiza o processo como âncora principal
+            match_proc = re.search(r"(\d{7}-\d{2}\.\d{4})", linha)
+            if not match_proc: continue
             
-            if proc_match and data_match and hora_match:
-                proc = proc_match.group(1)
-                data = data_match.group(1)
-                hora = hora_match.group(1)
+            proc = match_proc.group(1)
+            
+            # 2. Divide a linha em 'antes do processo' e 'depois do processo'
+            partes_antes = linha.split(proc)[0].strip().split()
+            # Divide o depois por Tabs ou múltiplos espaços
+            partes_depois = [p.strip() for p in re.split(r'\t|\s{2,}', linha.split(proc)[1].strip()) if p.strip()]
+            
+            if len(partes_antes) >= 2 and len(partes_depois) >= 1:
+                data = partes_antes[0]
+                hora = partes_antes[1]
+                senha = partes_depois[0]
                 
-                # Pegar o que vem DEPOIS do processo
-                pos_final_proc = linha.find(proc) + len(proc)
-                resto = linha[pos_final_proc:].strip()
+                # A Vara é o que estiver entre a senha e o mediador (geralmente partes_depois[1])
+                vara = partes_depois[1] if len(partes_depois) > 2 else (partes_depois[1] if len(partes_depois) == 2 else "---")
                 
-                # Dividir o resto por TAB ou múltiplos espaços
-                partes_depois = [p.strip() for p in re.split(r'\t|\s{2,}', resto) if p.strip()]
+                # O Mediador é SEMPRE o último bloco de texto da linha inteira
+                mediador_raw = re.split(r'\t|\s{2,}', linha)[-1].strip()
                 
-                if len(partes_depois) >= 2:
-                    senha = partes_depois[0]
-                    vara = partes_depois[1]
-                    # O Mediador é o último elemento da linha inteira
-                    mediador = re.split(r'\t|\s{2,}', linha)[-1].strip()
-                    
-                    if mediador not in mediadores_dict:
-                        mediadores_dict[mediador] = []
-                    
-                    mediadores_dict[mediador].append({
-                        'data': data, 'hora': hora, 'proc': proc, 
-                        'senha': senha, 'vara': vara,
-                        'dia_semana': obter_dia_semana(data)
-                    })
+                # Normalização de Cancelados para evitar múltiplos arquivos de erro
+                med_upper = mediador_raw.upper()
+                if any(x in med_upper for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"]):
+                    nome_grupo = "AUDIENCIA CANCELADA"
+                else:
+                    nome_grupo = mediador_raw
 
-        if not mediadores_dict: return "Nenhum dado processado. Verifique se o Processo, Data e Hora est\u00e3o corretos."
+                if nome_grupo not in mediadores_dict:
+                    mediadores_dict[nome_grupo] = []
+                
+                # Cálculo do dia da semana simplificado
+                try:
+                    d_obj = datetime.strptime(data, "%d/%m/%Y")
+                    dias = ["SEGUNDA-FEIRA", "TER\u00c7A-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "S\u00c1BADO", "DOMINGO"]
+                    dia_semana = dias[d_obj.weekday()]
+                except: dia_semana = "DIA"
 
+                mediadores_dict[nome_grupo].append({
+                    'data': data, 'hora': hora, 'proc': proc, 
+                    'senha': senha, 'vara': vara, 'dia_semana': dia_semana
+                })
+
+        # Geração do ZIP
         memory_file = io.BytesIO()
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for nome_med, audiencias in mediadores_dict.items():
-                conteudo_rtf = criar_conteudo_rtf(nome_med, audiencias)
-                filename = f"{nome_med.replace(' ', '_')}.rtf"
-                zf.writestr(filename, conteudo_rtf.encode('ascii', errors='ignore'))
+            for grupo, lista in mediadores_dict.items():
+                conteudo = criar_conteudo_rtf(grupo, lista)
+                nome_arq = f"{grupo.replace(' ', '_').replace('/', '-')}.rtf"
+                zf.writestr(nome_arq, conteudo.encode('ascii', errors='ignore'))
         
         memory_file.seek(0)
-        return send_file(memory_file, as_attachment=True, download_name="pautas.zip", mimetype='application/zip')
+        return send_file(memory_file, as_attachment=True, download_name="pautas_completas.zip", mimetype='application/zip')
 
     return '''
-    <html><body style="font-family:sans-serif; padding:40px;">
-    <h2>Gerador ZIP - Vers\u00e3o Corrigida</h2>
-    <form method="post"><textarea name="dados" style="width:100%; height:400px;"></textarea><br>
-    <button type="submit" style="padding:10px 20px; background:#1a73e8; color:white; border:none; border-radius:5px; margin-top:10px;">GERAR ZIP</button>
-    </form></body></html>
+    <html><body style="font-family:sans-serif; background:#f0f2f5; padding:50px;">
+    <div style="background:white; padding:30px; border-radius:10px; max-width:900px; margin:auto; box-shadow:0 5px 15px rgba(0,0,0,0.1);">
+    <h2>Gerador de Pautas - Garantia Total</h2>
+    <p>O script processa cada linha individualmente. O nome na última coluna define o arquivo.</p>
+    <form method="post"><textarea name="dados" style="width:100%; height:450px; font-family:monospace; padding:10px;"></textarea><br>
+    <button type="submit" style="width:100%; padding:15px; background:#1a73e8; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-top:10px;">GERAR E BAIXAR TODOS OS ARQUIVOS (.ZIP)</button>
+    </form></div></body></html>
     '''
 
 if __name__ == "__main__":
