@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, send_file
+from flask import Flask, request, send_file
 import re
 import io
 import zipfile
@@ -26,7 +26,9 @@ def criar_conteudo_rtf(nome_grupo, audiencias):
     rtf += r"Segue(m) \b *CANCELAMENTO(S) DE AUDI\u202?NCIA(S):* \b0 \par\par "
     rtf += "-"*64 + r"\par\par "
     for item in audiencias:
-        rtf += r"{\b *" + f"{item['dia_semana']}: {item['data']} " + r"\'e0s " + f"{item['hora']}.*" + r"} \par "
+        # Aplicamos o limpar_acentos_rtf aqui para garantir que o dia da semana saia correto
+        linha_dia = limpar_acentos_rtf(f"{item['dia_semana']}: {item['data']}")
+        rtf += r"{\b *" + linha_dia + r" \'e0s " + f"{item['hora']}.*" + r"} \par "
         rtf += f"PROC {item['proc']}. \par "
         rtf += f"SENHA: {item['senha']}. \par "
         rtf += f"VARA: {limpar_acentos_rtf(item['vara'])}. \par "
@@ -54,14 +56,11 @@ def index():
             proc = match_proc.group(1)
             linha_upper = linha_limpa.upper()
             
-            # Identifica se é cancelada
             is_cancelada = any(x in linha_upper for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"])
             
-            # Identifica o mediador (sempre a última coluna)
             partes_linha = re.split(r'\t|\s{2,}', linha_limpa)
             mediador_nome = partes_linha[-1].strip()
 
-            # Extração de dados comuns
             partes_antes = linha_limpa.split(proc)[0].strip().split()
             partes_depois = [p.strip() for p in re.split(r'\t|\s{2,}', linha_limpa.split(proc)[1].strip()) if p.strip()]
             
@@ -74,9 +73,11 @@ def index():
 
                 try:
                     d_obj = datetime.strptime(data, "%d/%m/%Y")
-                    dias = ["SEGUNDA-FEIRA", "TER\u00c7A-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "S\u00c1BADO", "DOMINGO"]
+                    # Ajustado para caracteres normais para que a função de limpeza funcione
+                    dias = ["SEGUNDA-FEIRA", "TERÇA-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "SÁBADO", "DOMINGO"]
                     dia_semana = dias[d_obj.weekday()]
-                except: dia_semana = "DIA"
+                except: 
+                    dia_semana = "DIA"
 
                 dados_audiencia = {
                     'data': data, 'hora': hora, 'proc': proc, 
@@ -84,15 +85,10 @@ def index():
                     'mediador_original': mediador_nome
                 }
 
-                # --- REGRA DE DISTRIBUIÇÃO ---
                 destinos = []
-                
-                # Se for cancelada, vai para o arquivo de cancelamentos
                 if is_cancelada:
                     destinos.append("AUDIENCIA CANCELADA")
                 
-                # Se o mediador não for um termo de cancelamento, vai para o arquivo do mediador
-                # (Isso garante que se for cancelada E tiver mediador, vá para ambos)
                 if not any(x in mediador_nome.upper() for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"]):
                     destinos.append(mediador_nome)
 
@@ -109,13 +105,12 @@ def index():
                 zf.writestr(nome_arq, conteudo.encode('ascii', errors='ignore'))
         
         memory_file.seek(0)
-        return send_file(memory_file, as_attachment=True, download_name="pautas_duplicadas.zip", mimetype='application/zip')
+        return send_file(memory_file, as_attachment=True, download_name="pautas_atualizadas.zip", mimetype='application/zip')
 
     return '''
     <html><body style="font-family:sans-serif; background:#f0f2f5; padding:50px;">
     <div style="background:white; padding:30px; border-radius:10px; max-width:900px; margin:auto; box-shadow:0 5px 15px rgba(0,0,0,0.1);">
-    <h2>Gerador de Pautas - Regra de Dupla Inser\u00e7\u00e3o</h2>
-    <p>Canceladas v\u00e3o para o arquivo geral E para o arquivo do mediador (se houver).</p>
+    <h2>Gerador de Pautas - Correção de Acentuação</h2>
     <form method="post"><textarea name="dados" style="width:100%; height:450px; font-family:monospace; padding:10px;"></textarea><br>
     <button type="submit" style="width:100%; padding:15px; background:#1a73e8; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-top:10px;">GERAR ZIP</button>
     </form></div></body></html>
