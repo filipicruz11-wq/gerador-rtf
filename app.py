@@ -26,7 +26,6 @@ def criar_conteudo_rtf(nome_grupo, audiencias):
     rtf += r"Segue(m) \b *CANCELAMENTO(S) DE AUDI\u202?NCIA(S):* \b0 \par\par "
     rtf += "-"*64 + r"\par\par "
     for item in audiencias:
-        # Aplicamos o limpar_acentos_rtf aqui para garantir que o dia da semana saia correto
         linha_dia = limpar_acentos_rtf(f"{item['dia_semana']}: {item['data']}")
         rtf += r"{\b *" + linha_dia + r" \'e0s " + f"{item['hora']}.*" + r"} \par "
         rtf += f"PROC {item['proc']}. \par "
@@ -44,36 +43,32 @@ def index():
         linhas = texto_bruto.strip().split('\n')
         mediadores_dict = {}
         
-        regex_proc = re.compile(r"(\d{7}-\d{2}\.\d{4})")
-        
         for linha in linhas:
             linha_limpa = linha.strip()
             if not linha_limpa: continue
             
-            match_proc = regex_proc.search(linha_limpa)
-            if not match_proc: continue
+            # Divide a linha por TAB ou múltiplos espaços
+            partes = re.split(r'\t+', linha_limpa)
             
-            proc = match_proc.group(1)
-            linha_upper = linha_limpa.upper()
-            
-            is_cancelada = any(x in linha_upper for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"])
-            
-            partes_linha = re.split(r'\t|\s{2,}', linha_limpa)
-            mediador_nome = partes_linha[-1].strip()
+            # Se não encontrar tabs, tenta por espaços duplos (fallback)
+            if len(partes) < 6:
+                partes = re.split(r'\s{2,}', linha_limpa)
 
-            partes_antes = linha_limpa.split(proc)[0].strip().split()
-            partes_depois = [p.strip() for p in re.split(r'\t|\s{2,}', linha_limpa.split(proc)[1].strip()) if p.strip()]
-            
-            if len(partes_antes) >= 2 and len(partes_depois) >= 1:
-                data = partes_antes[0]
-                hora = partes_antes[1]
-                senha = partes_depois[0]
-                vara = partes_depois[1] if len(partes_depois) > 1 else "---"
-                if vara == mediador_nome: vara = "---"
+            # Verifica se temos as colunas necessárias
+            if len(partes) >= 6:
+                data = partes[0].strip()
+                hora = partes[1].strip()
+                proc = partes[2].strip()
+                senha = partes[3].strip()
+                vara = partes[4].strip()
+                mediador_nome = partes[5].strip()
 
+                # Identifica cancelamento
+                is_cancelada = any(x in linha_limpa.upper() for x in ["CANCELADA", "CANCELADO"])
+
+                # Tratamento do dia da semana
                 try:
                     d_obj = datetime.strptime(data, "%d/%m/%Y")
-                    # Ajustado para caracteres normais para que a função de limpeza funcione
                     dias = ["SEGUNDA-FEIRA", "TERÇA-FEIRA", "QUARTA-FEIRA", "QUINTA-FEIRA", "SEXTA-FEIRA", "SÁBADO", "DOMINGO"]
                     dia_semana = dias[d_obj.weekday()]
                 except: 
@@ -85,23 +80,24 @@ def index():
                     'mediador_original': mediador_nome
                 }
 
-                destinos = []
+                # Define para qual arquivo vai (Cancelados ou nome do Mediador)
                 if is_cancelada:
-                    destinos.append("AUDIENCIA CANCELADA")
-                
-                if not any(x in mediador_nome.upper() for x in ["CANCELADA", "CANCELADO", "AUDIENCIA CANCELADA"]):
-                    destinos.append(mediador_nome)
+                    grupo = "AUDIENCIA CANCELADA"
+                else:
+                    grupo = mediador_nome
 
-                for grupo in destinos:
-                    if grupo not in mediadores_dict:
-                        mediadores_dict[grupo] = []
-                    mediadores_dict[grupo].append(dados_audiencia)
+                if grupo not in mediadores_dict:
+                    mediadores_dict[grupo] = []
+                mediadores_dict[grupo].append(dados_audiencia)
 
+        # Geração do ZIP
         memory_file = io.BytesIO()
         with zipfile.ZipFile(memory_file, 'w', zipfile.ZIP_DEFLATED) as zf:
             for grupo, lista in mediadores_dict.items():
                 conteudo = criar_conteudo_rtf(grupo, lista)
-                nome_arq = f"{grupo.replace(' ', '_').replace('/', '-')}.rtf"
+                # Remove caracteres inválidos para nome de arquivo
+                nome_limpo = re.sub(r'[\\/*?:"<>|]', "", grupo).replace(' ', '_')
+                nome_arq = f"{nome_limpo}.rtf"
                 zf.writestr(nome_arq, conteudo.encode('ascii', errors='ignore'))
         
         memory_file.seek(0)
@@ -110,8 +106,9 @@ def index():
     return '''
     <html><body style="font-family:sans-serif; background:#f0f2f5; padding:50px;">
     <div style="background:white; padding:30px; border-radius:10px; max-width:900px; margin:auto; box-shadow:0 5px 15px rgba(0,0,0,0.1);">
-    <h2>Gerador de Pautas - Correção de Acentuação</h2>
-    <form method="post"><textarea name="dados" style="width:100%; height:450px; font-family:monospace; padding:10px;"></textarea><br>
+    <h2>Gerador de Pautas - Formato Colunas</h2>
+    <p style="font-size:0.9em; color:#666;">Cole as informações copiadas da tabela (Data, Hora, Processo, Senha, Vara, Mediador).</p>
+    <form method="post"><textarea name="dados" style="width:100%; height:450px; font-family:monospace; padding:10px;" placeholder="04/05/2026	13:30	1501085-40.2026	ncthsx	2ª FAMÍLIA	LIZANDRA..."></textarea><br>
     <button type="submit" style="width:100%; padding:15px; background:#1a73e8; color:white; border:none; border-radius:5px; font-weight:bold; cursor:pointer; margin-top:10px;">GERAR ZIP</button>
     </form></div></body></html>
     '''
